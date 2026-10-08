@@ -1,4 +1,4 @@
-import { User, ConversationSummary, Conversation, Message, ImageUploadResponse, ImageComparisonResponse } from './types';
+import { User, ConversationSummary, Conversation, Message, ImageUploadResponse, ImageComparisonResponse, DetectedObject } from './types';
 
 const API_BASE = '/api/v1';
 
@@ -118,6 +118,12 @@ export const api = {
       const err = await res.json();
       throw new Error(err.detail || 'Image upload failed');
     }
+    return res.json();
+  },
+
+  // Image Objects
+  getImageObjects: async (imageId: string): Promise<DetectedObject[]> => {
+    const res = await fetchWithAuth(`/images/${imageId}/objects`);
     return res.json();
   },
 

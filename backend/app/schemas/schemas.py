@@ -95,6 +95,8 @@ class WhyThisAnswerPayload(BaseModel):
     verification_steps: List[str]
     unsupported_claims: List[str]
     annotations: List[DetectedObject]
+    suggested_questions: Optional[List[str]] = []
+
 
 # --- Message & Conversation Schemas ---
 class MessageCreate(BaseModel):
@@ -117,6 +119,20 @@ class MessageResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class ImageRecordResponse(BaseModel):
+    id: str
+    conversation_id: str
+    file_path: str
+    thumbnail_path: Optional[str] = None
+    sha256: str
+    width: int
+    height: int
+    mime_type: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class ConversationCreate(BaseModel):
     title: Optional[str] = "New Verification Chat"
 
@@ -127,6 +143,7 @@ class ConversationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     messages: List[MessageResponse] = []
+    images: List[ImageRecordResponse] = []
 
     class Config:
         from_attributes = True
@@ -150,6 +167,9 @@ class ImageUploadResponse(BaseModel):
     mime_type: str
     objects_count: int
     ocr_text_length: int
+    suggested_questions: List[str] = []
+    initial_summary: str = ""
+
 
 class ImageComparisonRequest(BaseModel):
     image_a_id: str

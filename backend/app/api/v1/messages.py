@@ -8,8 +8,10 @@ from app.models.models import User, Conversation, Message, ImageRecord, VisualOb
 from app.schemas.schemas import MessageCreate, MessageResponse, WhyThisAnswerPayload
 from app.vision.verification_engine import verification_engine
 from app.vision.memory import conversation_memory
+from app.vision.question_generator import generate_dynamic_image_questions
 from app.storage import get_storage_provider
 from app.api.v1.ws import manager
+
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 
@@ -85,6 +87,28 @@ async def send_message(
         for o in obj_res.scalars().all()
     ]
 
+    # Fetch existing OCR results from DB if available
+    ocr_stmt = select(OCRResult).where(OCRResult.image_id == target_image.id)
+    ocr_res = await db.execute(ocr_stmt)
+    existing_ocr_rows = ocr_res.scalars().all()
+    existing_ocr = None
+    if existing_ocr_rows:
+        combined_text = " ".join(r.text for r in existing_ocr_rows)
+        all_items = []
+        for r in existing_ocr_rows:
+            if r.bounding_boxes_json:
+                try:
+                    all_items.extend(json.loads(r.bounding_boxes_json))
+                except Exception:
+                    pass
+        existing_ocr = {
+            "text": combined_text,
+            "items": all_items,
+            "entities": ocr_engine._extract_entities(combined_text),
+            "has_text": bool(combined_text.strip()),
+            "word_count": len(combined_text.split())
+        }
+
     # Resolve Pronouns ("it", "this", "that") via memory
     memory_res = conversation_memory.resolve_pronouns(msg_in.content, existing_objects)
     question_to_engine = memory_res["augmented_query"]
@@ -103,7 +127,8 @@ async def send_message(
         question=question_to_engine,
         recent_objects=existing_objects,
         is_challenge_mode=msg_in.is_challenge,
-        ws_callback=ws_step_callback
+        ws_callback=ws_step_callback,
+        existing_ocr=existing_ocr
     )
 
     # Save visual objects to DB if not saved yet
@@ -148,7 +173,14 @@ async def send_message(
     db.add(vrun)
     await db.commit()
 
-    # Formulate "Why this answer" payload
+    # Formulate "Why this answer" payload & dynamic questions
+    dyn_gen = generate_dynamic_image_questions(
+        verif_res.get("objects", []),
+        verif_res.get("ocr_data", {}),
+        verif_res.get("scene"),
+        verif_res.get("spatial_relations")
+    )
+
     why_payload = WhyThisAnswerPayload(
         question=msg_in.content,
         answer=verif_res["answer"],
@@ -166,8 +198,10 @@ async def send_message(
                 "attributes": o.get("attributes", {})
             }
             for o in verif_res.get("objects", [])
-        ]
+        ],
+        suggested_questions=dyn_gen["suggested_questions"]
     )
+
 
     # 4. Save AI Response Message
     ai_msg = Message(

@@ -40,9 +40,7 @@ def validate_and_preprocess_image(content: bytes):
     # 3. Safe decode & Decompression bomb guard
     try:
         image = Image.open(io.BytesIO(content))
-        image.verify()  # Verify integrity
-        # Re-open for operations after verify()
-        image = Image.open(io.BytesIO(content))
+        image.load()  # Fast single-pass verification and pixel load
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -62,28 +60,28 @@ def validate_and_preprocess_image(content: bytes):
     # 6. Compute SHA-256 hash
     sha256_hash = hashlib.sha256(content).hexdigest()
 
-    # 7. Strip metadata by creating fresh clean image
+    # 7. Strip metadata using fast C-level canvas paste (eliminates memory-heavy getdata allocations)
     clean_img = Image.new(image.mode, image.size)
-    clean_img.putdata(list(image.getdata()))
+    clean_img.paste(image)
 
-    # 8. Resize if extremely large (e.g., > 3840 wide/high) keeping aspect ratio
-    max_dim = 3840
+    # 8. Optimize dimensions (max 1920px) for ultra-fast CV & OCR processing without losing quality
+    max_dim = 1920
     width, height = clean_img.size
     if width > max_dim or height > max_dim:
-        clean_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        clean_img.thumbnail((max_dim, max_dim), Image.Resampling.BILINEAR)
         width, height = clean_img.size
 
     # Save cleaned image to bytes
     out_buffer = io.BytesIO()
     fmt = "JPEG" if mime_type == "image/jpeg" else ("PNG" if mime_type == "image/png" else "WEBP")
-    clean_img.save(out_buffer, format=fmt, quality=95)
+    clean_img.save(out_buffer, format=fmt, quality=90)
     clean_bytes = out_buffer.getvalue()
 
-    # 9. Generate thumbnail (300x300 max)
+    # 9. Fast thumbnail generation (300x300 max)
     thumb_img = clean_img.copy()
-    thumb_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+    thumb_img.thumbnail((300, 300), Image.Resampling.BILINEAR)
     thumb_buffer = io.BytesIO()
-    thumb_img.save(thumb_buffer, format=fmt, quality=80)
+    thumb_img.save(thumb_buffer, format=fmt, quality=75)
     thumb_bytes = thumb_buffer.getvalue()
 
     return {

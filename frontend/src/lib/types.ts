@@ -38,6 +38,7 @@ export interface WhyThisAnswerPayload {
   verification_steps: string[];
   unsupported_claims: string[];
   annotations: DetectedObject[];
+  suggested_questions?: string[];
 }
 
 export interface Message {
@@ -59,6 +60,18 @@ export interface ConversationSummary {
   last_message?: string;
 }
 
+export interface ImageRecordResponse {
+  id: string;
+  conversation_id: string;
+  file_path: string;
+  thumbnail_path?: string;
+  sha256: string;
+  width: number;
+  height: number;
+  mime_type: string;
+  created_at: string;
+}
+
 export interface Conversation {
   id: string;
   user_id: string;
@@ -66,6 +79,7 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   messages: Message[];
+  images?: ImageRecordResponse[];
 }
 
 export interface ImageUploadResponse {
@@ -79,7 +93,10 @@ export interface ImageUploadResponse {
   mime_type: string;
   objects_count: number;
   ocr_text_length: number;
+  suggested_questions?: string[];
+  initial_summary?: string;
 }
+
 
 export interface ImageComparisonResponse {
   id: string;

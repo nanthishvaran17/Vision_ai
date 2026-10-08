@@ -11,6 +11,9 @@ from app.security.upload_guard import validate_and_preprocess_image
 from app.storage import get_storage_provider
 from app.vision.object_detector import object_detector
 from app.vision.ocr import ocr_engine
+from app.vision.scene_analyzer import scene_analyzer
+from app.vision.spatial_analyzer import spatial_analyzer
+from app.vision.question_generator import generate_dynamic_image_questions
 
 router = APIRouter(prefix="/images", tags=["Images"])
 
@@ -72,6 +75,9 @@ async def upload_image(
     await db.refresh(img_record)
 
     # 3. Detect objects & text (reuse cache or run computer vision)
+    formatted_objs = []
+    ocr_data = {"has_text": False, "text": "", "items": []}
+
     if cached_img:
         cached_objs_stmt = select(VisualObject).where(VisualObject.image_id == cached_img.id)
         c_objs = (await db.execute(cached_objs_stmt)).scalars().all()
@@ -80,6 +86,13 @@ async def upload_image(
                 image_id=img_record.id, label=co.label, confidence=co.confidence,
                 x1=co.x1, y1=co.y1, x2=co.x2, y2=co.y2, attributes_json=co.attributes_json
             ))
+            attrs = json.loads(co.attributes_json) if co.attributes_json else {}
+            formatted_objs.append({
+                "id": co.id, "label": co.label, "confidence": co.confidence,
+                "box": {"x1": co.x1, "y1": co.y1, "x2": co.x2, "y2": co.y2},
+                "attributes": attrs
+            })
+
         cached_ocr_stmt = select(OCRResult).where(OCRResult.image_id == cached_img.id)
         c_ocr = (await db.execute(cached_ocr_stmt)).scalars().all()
         for ro in c_ocr:
@@ -90,7 +103,9 @@ async def upload_image(
         await db.commit()
 
         obj_count = len(c_objs)
-        text_len = sum(len(ro.text) for ro in c_ocr)
+        combined_text = " ".join(ro.text for ro in c_ocr)
+        text_len = len(combined_text)
+        ocr_data = {"has_text": bool(combined_text.strip()), "text": combined_text, "items": []}
     else:
         detected_objs = object_detector.detect_objects(prep_data["content"])
         for obj in detected_objs:
@@ -100,6 +115,7 @@ async def upload_image(
                 attributes_json=json.dumps(obj.get("attributes", {}))
             )
             db.add(vo)
+            formatted_objs.append(obj)
 
         ocr_data = ocr_engine.extract_text(prep_data["content"])
         if ocr_data.get("has_text"):
@@ -112,7 +128,27 @@ async def upload_image(
         obj_count = len(detected_objs)
         text_len = len(ocr_data.get("text", ""))
 
+    # 4. Generate dynamic image questions
+    scene_info = scene_analyzer.analyze_scene(prep_data["content"])
+    spatial_rels = spatial_analyzer.analyze_spatial_relations(formatted_objs)
+    dyn_gen = generate_dynamic_image_questions(formatted_objs, ocr_data, scene_info, spatial_rels)
+
+    # 5. Smart auto-title conversation if title is default or generic
+    if conv and (not conv.title or conv.title in ["New Verification Chat", "Visual Verification Session", "Image Upload Session"]):
+        if ocr_data.get("has_text") and ocr_data.get("text"):
+            clean_t = ocr_data["text"].split("\n")[0][:25].strip()
+            if clean_t and "Text region" not in clean_t:
+                conv.title = f"Doc: {clean_t}"
+        if conv.title in ["New Verification Chat", "Visual Verification Session", "Image Upload Session"]:
+            if formatted_objs:
+                top_labels = list(dict.fromkeys(o["label"] for o in formatted_objs[:2]))
+                conv.title = f"{' & '.join(top_labels).title()} Scan"
+            else:
+                conv.title = "Visual Scan Session"
+        await db.commit()
+
     return ImageUploadResponse(
+
         id=img_record.id,
         conversation_id=target_conv_id,
         file_path=rel_file_path,
@@ -122,8 +158,11 @@ async def upload_image(
         height=img_record.height,
         mime_type=img_record.mime_type,
         objects_count=obj_count,
-        ocr_text_length=text_len
+        ocr_text_length=text_len,
+        suggested_questions=dyn_gen["suggested_questions"],
+        initial_summary=dyn_gen["initial_summary"]
     )
+
 
 @router.get("/{image_id}/objects")
 async def get_image_objects(
@@ -159,3 +198,45 @@ async def get_image_ocr(
         }
         for o in ocrs
     ]
+
+@router.get("/{image_id}/dynamic-questions")
+async def get_image_dynamic_questions(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(ImageRecord).where(ImageRecord.id == image_id)
+    res = await db.execute(stmt)
+    img = res.scalar_one_or_none()
+    if not img:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    storage = get_storage_provider()
+    image_bytes = await storage.get_file(img.file_path)
+
+    objs_stmt = select(VisualObject).where(VisualObject.image_id == image_id)
+    objs_res = await db.execute(objs_stmt)
+    formatted_objs = [
+        {
+            "id": o.id, "label": o.label, "confidence": o.confidence,
+            "box": {"x1": o.x1, "y1": o.y1, "x2": o.x2, "y2": o.y2},
+            "attributes": json.loads(o.attributes_json) if o.attributes_json else {}
+        }
+        for o in objs_res.scalars().all()
+    ]
+
+    ocr_stmt = select(OCRResult).where(OCRResult.image_id == image_id)
+    ocr_rows = (await db.execute(ocr_stmt)).scalars().all()
+    combined_text = " ".join(r.text for r in ocr_rows)
+    ocr_data = {
+        "has_text": bool(combined_text.strip()),
+        "text": combined_text,
+        "items": [],
+        "entities": ocr_engine._extract_entities(combined_text)
+    }
+
+    scene_info = scene_analyzer.analyze_scene(image_bytes)
+    spatial_rels = spatial_analyzer.analyze_spatial_relations(formatted_objs)
+    dyn_res = generate_dynamic_image_questions(formatted_objs, ocr_data, scene_info, spatial_rels)
+    return dyn_res
+

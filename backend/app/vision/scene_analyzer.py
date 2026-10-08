@@ -30,15 +30,15 @@ class SceneAnalyzer:
         laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         is_sharp = laplacian_var > 100.0
 
-        # Dominant Colors via k-means clustering
+        # Dominant Colors via fast k-means clustering
         pixels = img_np.reshape(-1, 3).astype(np.float32)
-        # Sample for speed if large
-        if len(pixels) > 10000:
-            indices = np.random.choice(len(pixels), 10000, replace=False)
+        # Sample 2000 pixels for maximum speed
+        if len(pixels) > 2000:
+            indices = np.random.choice(len(pixels), 2000, replace=False)
             pixels = pixels[indices]
             
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        _, labels, centers = cv2.kmeans(pixels, 3, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 5, 1.0)
+        _, labels, centers = cv2.kmeans(pixels, 3, None, criteria, 2, cv2.KMEANS_RANDOM_CENTERS)
         
         counts = np.bincount(labels.flatten())
         total_counts = sum(counts)

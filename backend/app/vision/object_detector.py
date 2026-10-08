@@ -13,6 +13,13 @@ class ObjectDetector:
         Maps detections to natural real-world labels (laptop, tablet, phone, bottle, notice, table, document).
         """
         pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        orig_w, orig_h = pil_img.size
+        
+        # Downscale for high-speed contour processing if large
+        max_det_dim = 1280
+        if orig_w > max_det_dim or orig_h > max_det_dim:
+            pil_img.thumbnail((max_det_dim, max_det_dim), Image.Resampling.BILINEAR)
+        
         img_np = np.array(pil_img)
         h, w, _ = img_np.shape
 
@@ -76,14 +83,26 @@ class ObjectDetector:
             })
 
         if not objects:
+            roi_gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+            laplacian_var = cv2.Laplacian(roi_gray, cv2.CV_64F).var()
+            asp = w / float(h)
+            
+            if 0.85 <= asp <= 1.15:
+                fallback_label = "circular emblem / logo badge"
+            elif laplacian_var > 100 or asp > 1.2:
+                fallback_label = "document / poster graphic"
+            else:
+                fallback_label = "visual object"
+
             objects.append({
                 "id": f"obj_main_{str(uuid.uuid4())[:8]}",
-                "label": "primary object",
-                "confidence": 0.85,
+                "label": fallback_label,
+                "confidence": 0.88,
                 "box": {"x1": 0.05, "y1": 0.05, "x2": 0.95, "y2": 0.95},
                 "attributes": {
                     "color": self._get_color_name(img_np.mean(axis=(0, 1))),
-                    "area_percentage": 90.0
+                    "area_percentage": 90.0,
+                    "aspect_ratio": round(asp, 2)
                 }
             })
 
@@ -97,7 +116,9 @@ class ObjectDetector:
 
         area_ratio = (box_w * box_h) / float(w * h)
 
-        if area_ratio > 0.6:
+        if 0.85 <= aspect_ratio <= 1.15 and fill_ratio > 0.65:
+            return "circular emblem / logo"
+        elif area_ratio > 0.6:
             return "table / surface workspace"
         elif 1.2 <= aspect_ratio <= 1.8 and laplacian_var > 120 and area_ratio > 0.1:
             return "document / notice card"
@@ -112,7 +133,7 @@ class ObjectDetector:
         elif aspect_ratio > 2.2:
             return "keyboard / bar item"
         else:
-            return "device / desktop object"
+            return "visual device / object"
 
     def _get_color_name(self, rgb: np.ndarray) -> str:
         r, g, b = rgb[0], rgb[1], rgb[2]

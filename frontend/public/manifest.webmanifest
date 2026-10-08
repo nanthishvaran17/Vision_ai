@@ -1,0 +1,16 @@
+{
+  "name": "VisionNext AI",
+  "short_name": "VisionNext",
+  "description": "Conversational Image Recognition Chatbot with Active Visual Verification Engine",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
